@@ -1,0 +1,134 @@
+﻿
+
+
+https://www.cnblogs.com/phpdragon/p/8231533.html
+https://blog.csdn.net/majiawenzzz/article/details/81098870
+
+
+
+
+
+
+
+
+
+
+
+mysql数据库是一款关系型数据库，所谓关系型数据库就是以二维表的形式存储数据，使用行和列方便我们对数据的增删改查。
+
+sql语言的作用类似于java的接口，数据库类似于java中接口的实现类  sql语句类似接口中的方法
+
+1.理解mysql底层B+ Tree机制
+2.sql执行计划详解
+3.索引优化详解
+4.sql语句优化
+5.其他分享
+
+
+查询使用缓存 
+相同查询执行多次，放入缓存，再次查询直接访问缓存
+
+
+
+Using where; Using temporary; Using filesort
+
+**********sql执行的详细过程********
+https://www.cnblogs.com/cdf-opensource-007/p/6502556.html
+
+
+创建表
+DROP TABLE IF EXISTS student;
+CREATE TABLE `student` (
+  `id` int(5) NOT NULL AUTO_INCREMENT,
+  `name` varchar(10) DEFAULT NULL,
+  `subject` varchar(10) DEFAULT NULL,
+  `grade` double(4,1) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=40 DEFAULT CHARSET=utf8;
+
+
+初始化数据
+
+
+INSERT INTO student(`name`,`subject`,grade)VALUES('aom','语文',88);
+INSERT INTO student(`name`,`subject`,grade)VALUES('aom','数学',99);
+INSERT INTO student(`name`,`subject`,grade)VALUES('aom','外语',55);
+
+INSERT INTO student(`name`,`subject`,grade)VALUES('jack','语文',67);
+INSERT INTO student(`name`,`subject`,grade)VALUES('jack','数学',44);
+INSERT INTO student(`name`,`subject`,grade)VALUES('jack','外语',55);
+
+INSERT INTO student(`name`,`subject`,grade)VALUES('susan','语文',56);
+INSERT INTO student(`name`,`subject`,grade)VALUES('susan','数学',35);
+INSERT INTO student(`name`,`subject`,grade)VALUES('susan','外语',77);
+
+INSERT INTO student(`name`,`subject`,grade)VALUES('alice','语文',88);
+INSERT INTO student(`name`,`subject`,grade)VALUES('alice','数学',77);
+INSERT INTO student(`name`,`subject`,grade)VALUES('alice','外语',100);
+
+INSERT INTO student(`name`,`subject`,grade)VALUES('rajo','语文',33);
+INSERT INTO student(`name`,`subject`,grade)VALUES('rajo','数学',55);
+INSERT INTO student(`name`,`subject`,grade)VALUES('rajo','外语',55);
+
+
+
+现在针对这张student表中的数据提出一个问题：要求查询出挂科数目多于两门（包含两门）的前两名学生的姓名，如果挂科数目相同按学生姓名升序排列。
+
+下面是这条查询的sql语句
+
+SELECT `name`,COUNT(`name`) AS num FROM student WHERE grade < 60 GROUP BY `name` HAVING num >= 2 ORDER BY num DESC,`name` ASC LIMIT 0,2;
+
+以上这条sql语句基本上概括了单表查询中所有要注意的点，那么我们就以这条sql为例来分析一下一条语句的执行流程。
+
+1，一条查询的sql语句先执行的是 FROM student 负责把数据库的表文件加载到内存中去，如图1.0中所示。（mysql数据库在计算机上也是一个进程，cpu会给该进程分配一块内存空间，在计算机‘服务’中可以看到，该进程的状态）
+2，WHERE grade < 60，会把（图1.0）所示表中的数据进行过滤，取出符合条件的记录行，生成一张临时表，
+3，GROUP BY `name`会把图（1.3）的临时表切分成若干临时表，我们用下图来表示内存中这个切分的过程。
+
+4，SELECT 的执行读取规则分为sql语句中有无GROUP BY两种情况。
+
+　　（1）当没有GROUP BY时，SELECT 会根据后面的字段名称对内存中的一张临时表整列读取。
+
+　　（2）当查询sql中有GROUP BY时，会对内存中的若干临时表分别执行SELECT，而且只取各临时表中的第一条记录，然后再形成新的临时表。这就决定了查询sql使用GROUP BY的场景下，SELECT后面跟的一般是参与分组的字段和聚合函数，否则查询出的数据要是情况而定。另外聚合函数中的字段可以是表中的任意字段，需要注意的是聚合函数会自动忽略空值。
+
+　　我们还是以本例中的查询sql来分析，现在内存中有四张被GROUP BY `name`切分成的临时表，我们分别取名为 tempTable1,tempTable2,tempTable3,tempTable4分别对应图（1.4)、图（1.5)、图（1.6)，图（1.7)下面写四条"伪SQL"来说明这个查询过程。
+
+SELECT `name`,COUNT(`name`) AS num FROM tempTable1;
+SELECT `name`,COUNT(`name`) AS num FROM tempTable2;
+SELECT `name`,COUNT(`name`) AS num FROM tempTable3;
+SELECT `name`,COUNT(`name`) AS num FROM tempTable4;
+
+最后再次成新的临时表
+
+
+5，HAVING num >= 2对上图所示临时表中的数据再次过滤，与WHERE语句不同的是HAVING 用在GROUP BY之后，WHERE是对FROM student从数据库表文件加载到内存中的原生数据过滤，
+而HAVING 是对SELECT 语句执行之后的临时表中的数据过滤，所以说column AS otherName ,otherName这样的字段在WHERE后不能使用，但在HAVING 后可以使用。
+但HAVING的后使用的字段只能是SELECT 后的字段，SELECT后没有的字段HAVING之后不能使用。HAVING num >= 2语句执行之后生成一张临时表
+6，ORDER BY num DESC,`name` ASC对以上的临时表按照num，name进行排序。
+7，LIMIT 0,2取排序后的前两个。
+
+
+以上就是一条sql的执行过程，同时我们在书写查询sql的时候应当遵守以下顺序。
+
+SELECT XXX FROM XXX WHERE XXX GROUP BY XXX HAVING XXX ORDER BY XXX LIMIT XXX;
+
+
+
+
+
+sql查询语句的处理步骤如下：
+--查询组合字段
+(5)select (5-2) distinct(5-3) top(<top_specification>)(5-1)<select_list>
+--连表
+(1)from (1-J)<left_table><join_type> join <right_table> on <on_predicate>
+        (1-A)<left_table><apply_type> apply <right_table_expression> as <alias>
+        (1-P)<left_table> pivot (<pivot_specification>) as <alias>
+        (1-U)<left_table> unpivot (<unpivot_specification>) as <alias>
+--查询条件
+(2)where <where_pridicate>
+--分组
+(3)group by <group_by_specification>
+--分组条件
+(4)having<having_predicate>
+--排序
+(6)order by<order_by_list>
+
