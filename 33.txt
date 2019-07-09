@@ -1,0 +1,262 @@
+三、mysql优化
+1、left join(left outer join)、right join(right outer join)、inner join(join，A, B whrer A.id=B.aid) 区别 （mysql 不支持full join（full outer join））
+table A left join table B  ->以A表为主表，B表为从表，即会查询出A表全部数据，B表中与A表的关联的数据，A表中未关联到的数据取null
+table A right join table B ->以B表为主表，A表为从表，即会查询出B表全部数据，A表中与B表的关联的数据，B表中未关联到的数据取null
+table A inner join table B ->查询A、B两表的关联上的数据，未关联到的不查询出来
+2、explain学习
+（1）字段含义：
+    select_type:
+        SIMPLE：简单的select查询，没有union或子查询
+        UBION：若第二个SELECT出现在UNION之后，则被标记为UNION
+        PRIMARY：查询中若包含任何复杂的子部分，最外层查询则被标记为PRIMARY
+        DEPENDENT UNION：union在子查询中，且对外层select是一个范围判断，如：in
+        UNION RESULT：union查询的结果
+        SUBQUERY：在SELECT或WHERE列表中包含了子查询，该子查询被标记为：SUBQUERY
+        DEPENDENT SUBQUERY：子查询中，且对外层select是一个范围判断，如：in
+        DERIVED： 在FROM列表中包含的子查询被标记为：DERIVED（衍生）；UNION包含在FROM子句的子查询中，外层SELECT将被标记为：DERIVED
+        注：
+            SUBQUERY和UNION还可以被标记为DEPENDENT和UNCACHEABLE。
+            DEPENDENT意味着select依赖于外层查询中发现的数据。
+            UNCACHEABLE意味着select中的某些 特性阻止结果被缓存于一个item_cache中。
+    type:
+        system：system是const类型的特例，当查询的表只有一行的情况下，使用system
+        const：表最多有一个匹配行，const用于比较primary key 或者unique索引。因为只匹配一行数据，所以很快
+        eq_ref:对于每个来自于前面的表(连接表)的行，只从该表(被连接表)中读取一行。这可能是最好的联接类型，除了const类型。
+        它用在一个索引的所有部分被联接使用并且索引是UNIQUE或PRIMARY KEY"。eq_ref可以用于使用=比较带索引的列。
+        ref：对于每个来自于前面的表的行组合，所有有匹配索引值的行将从这张表中读取。如果不能满足只去一行的情况，会使用索引,则使用ref。如果使用的键仅仅匹配少量行，该联接类型是不错的。
+        range：给定范围内的检索，比如 in(xx,xxxx) 或者 between 或者 >、<等
+        index：该联接类型与ALL相同，除了只有索引树被扫描。这通常比ALL快，因为索引文件通常比数据文件小,一般在使用了覆盖索引优化的情况下使用
+        ALL：对于每个来自于先前的表的行组合，进行完整的表扫描
+        index_merge：该联接类型表示使用了索引合并优化方法 常见如 ：  idx1 = ? or idx2 = ?
+    key：执行sql中用到的索引
+    possible_keys：指出优化器为查询选定的索引（备选索引或使用到的索引）
+    ref：和前方表连接的字段,const代表是常量值连接
+    rows：显示MYSQL执行查询的行数，简单且重要，数值越大越不好
+    extra：
+        Using where: 数据库服务层从存储引擎提取了数据又进行了一次条件过滤
+        Using index :列数据是从仅仅使用了索引中的信息而没有读取实际的行动的表返回的,使用了覆盖索引优化
+        Range checked for each: 没有找到理想的索引，因此对于从前面表中来的每一个行组合，MYSQL检查使用哪个索引，并用它来从表中返回行。这是使用索引的最慢的连接之一
+        Using filesort: 发生了硬盘或内存排序,一般是由order by 或 group by触发的;典型的情况,排序的字段不是驱动表的字段,则会使用临时表将数据都添加进去,最后进行排序,如果数据大则硬盘排序,如果小则内存排序.
+        Using temporary :使用了临时表,通常和filesort一起发生. 典型情况:使用了派生表.
+        using index condition: ICP优化,从5.6之后提供.将过滤条件下推到存储引擎层执行,能更好的利用复合索引来过滤数据,减少IO.
+        Using index for group-by:使用了松散索引扫描
+        Using union(uid_index,PRIMARY)：用到的索引组合
+    table：查询的表，取别名的显示别名
+    partitions：列代表给定表所使用的分区。这一列只会在EXPLAIN PARTITIONS 语句中出现。
+    key_len：定义了用于SQL 语句的连接条件的键的长度。此列值对于确认索引的有效性以及多列索引中用到的列的数目很重要
+        key_len: 4 // INT NOT NULL
+        key_len: 5 // INT NULL
+        key_len: 30 // CHAR(30) NOT NULL
+        key_len: 32 // VARCHAR(30) NOT NULL
+        key_len: 92 // VARCHAR(30) NULL CHARSET=utf8
+    filtered：给出了一个百分比的值，这个百分比值和rows 列的值一起使用，可以估计出那些将要和QEP 中的前一个表进行连接的行的数目。
+    前一个表就是指id 列的值比当前表的id 小的表。这一列只有在EXPLAIN EXTENDED 语句中才会出现。
+（2）EXPLAIN EXTENDED
+    将执行计划"反编译"成SELECT语句，运行SHOW WARNINGS 可得到被MySQL优化器优化后的查询语句
+（3）EXPLAIN PARTITIONS
+    用于分区表的EXPLAIN生成QEP的信息
+3、数据库优化方法
+（1）查询语句指出所查询的具体字段，不用*代替，增加适当的索引
+（2）查询语句的查询条件尽量使用有索引的字段作为约束条件
+（3）mysql中复合索引，如果需要用到索引条件，需从左往右，eg：index(a, b, c) a=1 and c=1可以用到索引，但是b=1 and c=1无法用到索引
+（4）模糊查询like子句如果想用到所以左%不能有，可以使用locate('aaa', column)>0或者position('aaa' in column) 代替column like %aaa%
+（5）mysql中in和or可以用到索引，但也尽量避免使用
+（6）mysql中 limit 1,5，其中5指的是所查询的记录数，当页数过大时，避免使用limit 100000,5，因为起始数目越大查询越慢
+（7）查询中尽量不使用子查询
+（8）连接查询时尽量使用小表连大表
+（9）当关联太多的时候，可以适当冗余部分不常修改的字段数据
+（10）索引所在列的字符编码应该一致，要不然索引也不起作用
+（11）建了索引的字段尽量别用于计算，否则索引不生效
+（12）可以使用union all 就不使用union，union all 不会去重
+（13）使用in时，大表在外层，小表在in子查询中，使用exists，小表在外层，大表在exists子查询中,not exists优于not in
+（14）tableA a, tableB b可以修改为tableA a straight_join tableB b，强制使用tableA表作为主表，避免一些内联查询选错主表导致查询过慢
+
+4、my.cnf参数
+注：- 字符与 _ 字符含义基本一样，即innodb_log_file_size与innodb-log-file-size是一样的
+查询my.cnf文件：mysql --help | grep -A 2 'Default options'    -A 2 2代表查询显示两行
+locate my.cnf  查询显示my.cnf 路径
+
+@ 用户变量，对用户起作用  SET @a='test';SELECT @a,(@a:=20) FROM tbl_name;
+@@系统变量，整个系统的变量参数   SET @@global.sort_buffer_size=value;  SET GLOBAL sort_buffer_size=value;
+没有默认为会话变量，当前的这个连接起作用 SET SESSION sort_buffer_size=value; SET @@session.sort_buffer_size=value; SET sort_buffer_size=value;
+注：通过sql语句设置的一些系统参数变量，重启数据库后可能失效，所以如果有一些是一直要改的，可以在my.cnf文件中增加配置
+
+查询全部配置参数：show VARIABLES
+
+[mysqld]
+基础配置：
+basedir=/data/mysql/mysql-5.7.9-linux-glibc2.5-x86_64：mysql安装文件基础路径
+datadir=/data/mysql/data：mysql数据文件存放路径
+socket=/data/mysql/mysql.sock：默认放到/temp路径下，最好修改；登录mysql的socket方式 mysql -S /tmp/mysql.sock ，登录指定端口的mysql使用-h  mysql -h127.0.0.1 -uroot -p -P3376 如果使用localhost默认使用的是socket登录
+pid_file=/data/mysql/mysql.pid：记录当前mysqld的进程的pid，数据文件相同，但端口不同情况下，防止同一个mysqld进程重复启动
+
+user=mysql：mysqld必须从root账户启动才能在启动后切换到另一个账户下执行
+port=3306：mysql连接端口
+default_storage_engine=InnoDB：默认使用的数据库引擎
+log_bin=/data/mysql/bin_log/bin_log：记录mysql内部增删改查等对mysql数据库有更新的内容的记录（对数据库的改动），主要用于数据库的主从复制以及增量恢复
+expire_logs_days=30：binlog保存时间，超过30天的删除
+binlog_format=ROW：基于SQL语句的复制(statement-based replication, SBR)，基于行的复制(row-based replication, RBR)，混合模式复制(mixed-based replication, MBR)。对应的，binlog的格式也有三种：STATEMENT，ROW，MIXED
+sync_binlog=n：每经过n次日志写操作就把日志文件写入硬盘一次(对日志信息进行一次同步)。n=1是最安全的做法，但效率最低。默认设置是n=0，意思是由操作系统来负责二进制日志文件的同步工作。
+server_id=1：表示是本机的序号为1,一般来讲就是master的意思
+log_slave_updates=1：数据库主从同步开启
+character_set_server=utf8：服务字符编码
+init_connect='set names utf8'：初始化连接时设置一些参数，可用于审计
+lower_case_table_names=1：不区分大小写
+log_bin_trust_function_creators=1：当二进制日志启用后，这个变量就会启用。它控制是否可以信任存储函数创建者，不会创建写入二进制日志引起不安全事件的存储函数。
+如果设置为0（默认值），用户不得创建或修改存储函数，除非它们具有除CREATE ROUTINE或ALTER ROUTINE特权之外的SUPER权限。
+设置为0还强制使用DETERMINISTIC特性或READS SQL DATA或NO SQL特性声明函数的限制。 如果变量设置为1，MySQL不会对创建存储函数实施这些限制。 此变量也适用于触发器的创建。
+symbolic-links=0：数据库或表不可以存储在my.cnf中指定datadir之外的分区或目录。为1的话就可以
+sql-mode=NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION：MySQL将运行在哪一种SQL模式下。这个选项的作用是让MySQL与其他的数据库系统保持最大程度的兼容，经常需要修改删除ONLY_FULL_GROUP_BY模式
+group_concat_max_len=5120：MySQL提供的group_concat函数可以拼接某个字段值成字符串的最大长度
+
+# INNODB
+innodb_buffer_pool_size=4G：InnoDB使用一个缓冲池来保存索引和原始数据,这里你设置越大,你在存取表里面数据时所需要的磁盘I/O越少，在一个独立使用的数据库服务器上,你可以设置这个变量到服务器物理内存大小的80%，不要设置过大
+innodb_log_file_size=256M：此参数确定数据日志文件的大小，更大的设置可以提高性能，但也会增加恢复故障数据库所需的时间
+innodb_file_per_table=1：InnoDB为独立表空间模式，每个数据库的每个表都会生成一个数据空间
+innodb_flush_method=fsync()：控制着innodb数据文件及redo log的打开、刷写模式;
+默认是fdatasync，调用fsync()去刷数据文件与redo log的buffer
+为O_DSYNC时，innodb会使用O_SYNC方式打开和刷写redo log,使用fsync()刷写数据文件
+为O_DIRECT时，innodb使用O_DIRECT打开数据文件，使用fsync()刷写数据文件跟redo log
+
+# MyISAM
+key_buffer_size=128M：指定用于索引的缓冲区大小，增加它可得到更好处理的索引(对所有读和多重写)，到你能负担得起那样多。如果你使它太大，系统将开始换页并且真的变慢了。比例key_reads/key_read_requests应该尽可能的低
+
+# LOGGING
+log_error=/data/mysql/error.log：错误日志路径
+long_query_time=5：慢查询时间 超过1秒则为慢查询
+slow_query_log=ON：是否开启慢查询日志，1表示开启，0表示关闭
+slow_query_log_file=/data/mysql/mysql-slow.log：慢查询日志文件路径
+
+# OTHER
+tmp_table_size=256M：MySQL的heap（堆积）表缓冲大小。所有联合在一个DML指令内完成，并且大多数联合甚至可以不用临时表即可以完成。如果适当调高该值，MySQL同时将增加heap表的大小，可达到提高联接查询速度的效果
+max_heap_table_size=64M：定义了用户可以创建的内存表(memory table)的大小。超过这个长度的HEAP数据表将被存入一个临时文件而不是驻留在内存里。
+query_cache_type=1：查询缓存区的工作模式:0, 禁用查询缓存区; 1，启用查询缓存区(默认设置); 2，”按需分配”模式，只响应SELECT SQL_CACHE命令
+query_cache_size=256M：查询缓存区的最大长度(默认设置是0，不开辟查询缓存区)。
+max_connections=2000：MySQL的最大连接数，如果服务器的并发连接请求量比较大，建议调高此值，以增加并行连接数量，介于MySQL会为每个连接提供连接缓冲区，就会开销越多的内存，所以要适当调整该值
+thread_cache_size=64：这个值（默认8）表示可以重新利用保存在缓存中线程的数量，当断开连接时如果缓存中还有空间，那么客户端的线程将被放到缓存中（大于3G  —> 64）
+table_open_cache=2048：MySQL每打开一个表，都会读入一些数据到table_open_cache缓存中，当MySQL在这个缓存中找不到相应信息时，才会去磁盘上读取。当过大时，如果系统处理不了那么多文件描述符，那么就会出现客户端失效，连接不上
+open_files_limit=8192：MySQL打开的文件描述符限制，默认最小1024;当open_files_limit没有被配置的时候，比较max_connections*5和ulimit -n的值，哪个大用哪个，
+当open_file_limit被配置的时候，比较open_files_limit和max_connections*5的值，哪个大用哪个。
+default_password_lifetime=0：设置密码过期的策略，此全局变量可以设置一个全局的自动密码过期策略，0为永不过期
+
+
+bulk_insert_buffer_size=8M：为一次插入多条新记录的INSERT命令分配的缓存区长度(默认设置是8M)
+join_buffer_size = 2M：在参加JOIN操作的数据列没有索引时为JOIN操作分配的缓存区长度(默认设置是128K)。
+query_cache_limit=4M：允许临时存放在查询缓存区里的查询结果的最大长度(默认设置是1M)。
+sore_buffer = 8M：为排序操作分配的缓存区的长度(默认设置是2M);如果这个缓存区太小，则必须创建一个临时文件来进行排序。
+
+
+
+[mysqld_safe]
+log-error=/data/mysql/mysqld.log：错误日志路径
+pid-file=/data/mysql/mysql.pid：记录当前mysqld的进程的pid，数据文件相同，但端口不同情况下，防止同一个mysqld进程重复启动
+
+[client]
+
+
+[mysqldump]   备份
+max_allowed_packet = 16M： #服务器发送和接受的最大包长度
+
+导出数据库：
+mysqldump -u[用户名] -h[ip] -p[密码] -P[端口号]  数据库名  表名（多个,分隔） >导出的文件名.sql
+mysqldump -uroot -proot --databases test --tables t1 t2>two.sql
+mysqldump -uroot -h127.0.0.1 -proot -P3306 -d education users>d:/user.sql
+-d：只导出表结构不导表数据
+-t：只导出表数据不导表结构
+mysqldump -uroot -proot --all-databases>all.sql  ： 导出所有数据库
+
+[myisamchk]
+
+
+修复数据库：
+myisamchk：必须停止数据库服务
+# service mysqld stop ;
+# myisamchk -r /var/lib/mysql/test/*MYI
+# service mysqld start;
+mysqlcheck：热修复
+# mysqlcheck –r DBname Tablename –uuser –ppassword
+注意：无论是myisamchk还是mysqlcheck，一般情况下不要使用-f强制修复，-f参数会在遇到一般修复无法成功的时候删除
+
+注：mysql的每一个表都会有两个隐藏字段，创建时间以及删除时间，存放的是事务的版本号，查询数据时时查询小于当前版本号的数据记录，
+新增数据时，事务版本号放入创建时间字段，当事务未提交时，无法被查询到，但提交后就可以被查询到，但删除删减中为null，当删除数据时，删除版本号放入删除字段，
+而更新数据也是新增记录，然后把当前版本号放入创建时间字段，原数据行的删除字段放当前版本号
+
+
+对mysql表进行了数据更新，会把涉及到这张表数据的缓存全部删除，不会去更新缓存
+
+
+sql执行过程，经历哪些步骤：
+一、从整体流程看
+1、与mysql服务器建立连接
+2、查询mysql缓存，如果命中则返回，否则执行下一步
+3、解析sql
+4、sql预处理
+5、优化器优化sql
+6、查询执行引擎执行sql查询
+7、将查询结果返回客户端
+
+二、从sql的具体步骤看
+FROM—>ON—>JOIN—>WHERE—>GROUP BY—>SUM(聚合函数)—>HAVING—>SELECT—>DISTINCT—>UNION—>ORDER BY—>LIMIT
+开始->FROM子句->WHERE子句->GROUP BY子句->HAVING子句->ORDER BY子句->SELECT子句->LIMIT子句->最终结果 （每个子句执行后都会产生一个中间结果，供接下来的子句使用，如果不存在某个子句，就跳过）
+1、首先对from子句中的前两个表执行一个笛卡尔乘积，此时生成虚拟表 vt1（选择相对小的表做基础表）
+2、接下来便是应用on筛选器，on 中的逻辑表达式将应用到 vt1 中的各个行，筛选出满足on逻辑表达式的行，生成虚拟表 vt2
+3、如果是outer join 那么这一步就将添加外部行，left outer jion 就把左表在第2步中过滤的添加进来，如果是right outer join 那么就将右表在第2步中过滤掉的行添加进来，这样生成虚拟表 vt3
+4、如果 from 子句中的表数目多余两个表，那么就将vt3和第三个表连接从而计算笛卡尔乘积，生成虚拟表，该过程就是一个重复1-3的步骤，最终得到一个新的虚拟表 vt3。
+5、where筛选器，对上一步生产的虚拟表引用where筛选器，生成虚拟表vt4，
+6、group by 子句将中的唯一的值组合成为一组，得到虚拟表vt5。使用了group by 子句，那么后面的步骤都只能使用聚合函数得到新的列
+7、应用cube或者rollup选项，为vt5生成超组，生成vt6
+8、应用having筛选器，生成vt7。having是适用于分组后数据的唯一筛选器
+9、处理select子句。将vt7中的在select中出现的列筛选出来。生成vt8
+10、应用distinct子句，vt8中移除相同的行，生成vt9。如果存在group by 子句，那么distinct子句是多余的
+11、应用order by子句。按照order_by_condition排序vt9，此时返回的一个游标，而不是虚拟表。这步可以使用select 查询字段中别名的步骤
+12、limit子句，指定条数范围
+
+
+数据库学习
+一、索引
+1、索引类型（mysql）
+
+1.1、从数据结构的角度
+（1）B+树索引  MySQL索引背后的数据结构及算法原理
+（2） hash索引：
+a 仅仅能满足"=","IN"和"<=>"查询，不能使用范围查询
+b 其检索效率非常高，索引的检索可以一次定位，不像B-Tree 索引需要从根节点到枝节点，最后才能访问到页节点这样多次的IO访问，所以 Hash 索引的查询效率要远高于 B-Tree 索引
+c 只有Memory存储引擎显示支持hash索引
+（3） FULLTEXT索引（现在MyISAM和InnoDB引擎都支持了）
+（4） R-Tree索引（用于对GIS数据类型创建SPATIAL索引）
+
+2.2、 从物理存储角度
+（1）聚集索引（clustered index）
+（2）非聚集索引（non-clustered index）
+
+2.3、 从逻辑角度
+（1）主键索引：主键索引是一种特殊的唯一索引，不允许有空值
+（2）普通索引或者单列索引
+（3）多列索引（复合索引）：复合索引指多个字段上创建的索引，只有在查询条件中使用了创建索引时的第一个字段，索引才会被使用。
+使用复合索引时遵循最左前缀集合：复合索引有(a,b,c)顺序排序索引，可以使用到索引的有① a=1 ;② a=1 and b=1; ③a=1 and b=1 and c=1;
+特殊情况a=1 and c=1，其中a=1用到了索引，但c=1没有用到索引
+（4）唯一索引或者非唯一索引
+（5）空间索引：空间索引是对空间数据类型的字段建立的索引，MYSQL中的空间数据类型有4种，分别是GEOMETRY、POINT、LINESTRING、POLYGON。
+MYSQL使用SPATIAL关键字进行扩展，使得能够用于创建正规索引类型的语法创建空间索引。创建空间索引的列，必须将其声明为NOT NULL，空间索引只能在存储引擎为MYISAM的表中创建
+
+CREATE TABLE table_name[col_name data type]
+[unique|fulltext|spatial][index|key][index_name](col_name[length])[asc|desc]
+1、unique|fulltext|spatial为可选参数，分别表示唯一索引、全文索引和空间索引；
+2、index和key为同义词，两者作用相同，用来指定创建索引
+3、col_name为需要创建索引的字段列，该列必须从数据表中该定义的多个列中选择；
+4、index_name指定索引的名称，为可选参数，如果不指定，MYSQL默认col_name为索引值；
+5、length为可选参数，表示索引的长度，只有字符串类型的字段才能指定索引长度；
+6、asc或desc指定升序或降序的索引值存储
+
+2、存储引擎
+InnoDB：
+特征：支持事务和行级锁
+行级锁模式：共享锁，排他锁，意向共享锁(表锁)，意向排他锁(表锁)，间隙锁。
+索引：引擎的自动增长咧必须是索引，如果是组合索引也必须是组合索引的第一列
+          如果没有设定主键或者非空唯一索引，就会自动生成一个6字节的主键(用户不可见)，数据是主索引的一部分，附加索引保存的是主索引的值。
+
+MyISAM：默认表类型，它是基于传统的ISAM类型，ISAM是Indexed Sequential Access Method (有索引的顺序访问方法) 的缩写，它是存储记录和文件的标准方法。不是事务安全的，而且不支持外键，如果执行大量的select，insert MyISAM比较适合。
+锁特征：只支持表级锁
+索引：引擎的自动增长列必须是索引，如果是组合索引，自动增长可以不是第一列，他可以根据前面几列进行排序后递增
+          允许没有任何索引和主键的表存在，且索引都是保存行的地址。
+
